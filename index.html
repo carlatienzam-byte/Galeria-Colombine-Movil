@@ -79,17 +79,21 @@
     AFRAME.registerComponent('cartel-interactivo', {
       schema: {
         cartelas: {type: 'array'},          // ids de las cartelas asociadas
-        color:    {default: COLOR_LUZ}
+        color:    {default: COLOR_LUZ},
+        ancho:    {default: CARTEL_ANCHO},  // tamaño del cartel (m)
+        alto:     {default: CARTEL_ALTO},
+        lado:     {default: 1},             // 1 = cartela a la derecha, -1 = a la izquierda
+        dy:       {default: -0.2}           // desnivel de la cartela respecto al centro del cartel
       },
 
       init: function () {
         this.activo = false;
         this.marco = [];
-        var w = CARTEL_ANCHO, h = CARTEL_ALTO, self = this;
+        var w = this.data.ancho, h = this.data.alto, self = this;
 
         /* Dos capas: filo intenso + halo suave. Están FUERA del área del cartel,
            en su mismo plano, así se ven desde ambas caras sin tapar la imagen. */
-        [[0.12, 1.0], [0.3, 0.3]].forEach(function (capa) {
+        [[w * 0.04, 1.0], [w * 0.1, 0.3]].forEach(function (capa) {
           var t = capa[0], op = capa[1];
           var barras = [
             {x: 0,             y:  h / 2 + t / 2, w: w + 2 * t, h: t},  // arriba
@@ -147,13 +151,15 @@
         if (normal.dot(haciaCam) < 0) yaw += Math.PI;
 
         var q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
-        var lateral = CARTEL_ANCHO / 2 + 0.3 + CARTELA_ANCHO / 2;
-        var lados = this.data.cartelas.length > 1 ? [1, -1] : [1];
+        var datos = this.data;
+        var lados = datos.cartelas.length > 1 ? [1, -1] : [datos.lado];
 
         this.data.cartelas.forEach(function (id, i) {
           var c = document.getElementById(id);
           if (!c) return;
-          var off = new THREE.Vector3(lateral * lados[i % lados.length], -0.3, 0.1).applyQuaternion(q);
+          var anchoCartela = parseFloat(c.getAttribute('width')) || CARTELA_ANCHO;
+          var lateral = datos.ancho / 2 + 0.3 + anchoCartela / 2;
+          var off = new THREE.Vector3(lateral * lados[i % lados.length], datos.dy, 0.1).applyQuaternion(q);
           c.object3D.position.set(pos.x + off.x, pos.y + off.y, pos.z + off.z);
           c.object3D.rotation.set(0, yaw, 0);
           c.setAttribute('visible', true);
@@ -356,16 +362,15 @@
 
     <!-- Cartel de inicio -->
     <a-cylinder position="0 0.60 -6" radius="0.5" height="1.50" material="color: #83632b" scale="-0.070 0.740 0.130"></a-cylinder>
-    <a-box class="hover" position="0 1.60 -6" rotation="0 90 0" material="color: #f1bb5c" scale="0.10 0.97 1"
+    <a-box id="cartel00" class="interactivo" data-nombre="Cartel de inicio" position="0 1.60 -6" width="1.5" height="1" depth="0.08"
       src="Carteles_Comprimidos/FP-LOGO-estable.jpg"
+      cartel-interactivo="cartelas: cartela00; ancho: 1.5; alto: 1; lado: -1; dy: 0.15"
       event-set__enter="_event: mouseenter; _target: #textoInicio; visible: true"
       event-set__leave="_event: mouseleave; _target: #textoInicio; visible: false"></a-box>
     <a-text id="textoInicio"
-      value="INICIO: Bienvenido a la muestra virtual CBS. Sigue las flechas, apunta a los carteles y pulsa INTERACTUAR para descubrir cosas sobre Carmen de Burgos."
+      value="INICIO: Bienvenidx a la muestra virtual CBS. Pulsa INTERACTUAR para ver como se hace el recorrido."
       align="center" color="#FFF" visible="false" position="0 2.9 -6" width="6" geometry="primitive: plane; width: 6.4; height: auto" material="shader: flat; color: #000; opacity: 0.55; transparent: true"></a-text>
 
-    <!-- Infografía de inicio -->
-    <a-box position="0 1.65 -5" width="1" height="2" depth="0.02" src="Carteles_Comprimidos/recorrido_00-INICIO.jpg"></a-box>
 
     <!-- Flecha 1 -->
     <a-cylinder position="0 0 -20" radius="0.5" height="1.5" material="color: #83632b" scale="-0.070 0.740 0.130"></a-cylinder>
@@ -412,21 +417,23 @@
          Ya no hay cajas: la interacción es directa con el cartel. -->
 
     <!-- Galería sur (z = -12 / -20) -->
-    <a-image id="cartel01" class="interactivo" data-nombre="Cartel 1" position="6 2.5 -12"   rotation="0 225 0" src="Carteles_Comprimidos/01CARTEL.jpg" width="3" height="4" cartel-interactivo="cartelas: cartela01"></a-image>
-    <a-image id="cartel02" class="interactivo" data-nombre="Cartel 2" position="14 2.5 -20"  rotation="0 -45 0" src="Carteles_Comprimidos/02CARTEL.jpg" width="3" height="4" cartel-interactivo="cartelas: cartela02"></a-image>
-    <a-image id="cartel03" class="interactivo" data-nombre="Cartel 3" position="22 2.5 -12"  rotation="0 225 0" src="Carteles_Comprimidos/03CARTEL.jpg" width="3" height="4" cartel-interactivo="cartelas: cartela03"></a-image>
-    <a-image id="cartel09" class="interactivo" data-nombre="Cartel 9" position="-20 2.5 -12" rotation="0 225 0" src="Carteles_Comprimidos/09CARTEL.jpg" width="3" height="4" cartel-interactivo="cartelas: cartela09"></a-image>
-    <a-image id="cartel10" class="interactivo" data-nombre="Cartel 10" position="-12 2.5 -20" rotation="0 -45 0" src="Carteles_Comprimidos/10CARTEL.jpg" width="3" height="4" cartel-interactivo="cartelas: cartela10"></a-image>
-    <a-image id="cartel11" class="interactivo" data-nombre="Cartel 11" position="-4 2.5 -12"  rotation="0 225 0" src="Carteles_Comprimidos/11CARTEL.jpg" width="3" height="4" cartel-interactivo="cartelas: cartela11"></a-image>
+    <a-image id="cartel01" class="interactivo" data-nombre="Cartel 1" position="6 1.6 -12"   rotation="0 225 0" src="Carteles_Comprimidos/01CARTEL.jpg" width="3" height="4" cartel-interactivo="cartelas: cartela01"></a-image>
+    <a-image id="cartel02" class="interactivo" data-nombre="Cartel 2" position="14 1.6 -20"  rotation="0 -45 0" src="Carteles_Comprimidos/02CARTEL.jpg" width="3" height="4" cartel-interactivo="cartelas: cartela02"></a-image>
+    <a-image id="cartel03" class="interactivo" data-nombre="Cartel 3" position="22 1.6 -12"  rotation="0 225 0" src="Carteles_Comprimidos/03CARTEL.jpg" width="3" height="4" cartel-interactivo="cartelas: cartela03"></a-image>
+    <a-image id="cartel09" class="interactivo" data-nombre="Cartel 9" position="-20 1.6 -12" rotation="0 225 0" src="Carteles_Comprimidos/09CARTEL.jpg" width="3" height="4" cartel-interactivo="cartelas: cartela09"></a-image>
+    <a-image id="cartel10" class="interactivo" data-nombre="Cartel 10" position="-12 1.6 -20" rotation="0 -45 0" src="Carteles_Comprimidos/10CARTEL.jpg" width="3" height="4" cartel-interactivo="cartelas: cartela10"></a-image>
+    <a-image id="cartel11" class="interactivo" data-nombre="Cartel 11" position="-4 1.6 -12"  rotation="0 225 0" src="Carteles_Comprimidos/11CARTEL.jpg" width="3" height="4" cartel-interactivo="cartelas: cartela11"></a-image>
 
     <!-- Galería norte (z = 12 / 20) — se ven por ambas caras -->
-    <a-box id="cartel04" class="interactivo" data-nombre="Cartel 4" position="12 2.5 12"  rotation="0 -135 0" width="3" height="4" depth="0.02" src="Carteles_Comprimidos/04CARTEL.jpg" cartel-interactivo="cartelas: cartela04"></a-box>
-    <a-box id="cartel05" class="interactivo" data-nombre="Cartel 5" position="4 2.5 20"   rotation="0 -45 0"  width="3" height="4" depth="0.02" src="Carteles_Comprimidos/05CARTEL.jpg" cartel-interactivo="cartelas: cartela05"></a-box>
-    <a-box id="cartel06" class="interactivo" data-nombre="Cartel 6" position="-4 2.5 12"  rotation="0 -135 0" width="3" height="4" depth="0.02" src="Carteles_Comprimidos/06CARTEL.jpg" cartel-interactivo="cartelas: cartela06"></a-box>
-    <a-box id="cartel07" class="interactivo" data-nombre="Cartel 7" position="-12 2.5 20" rotation="0 -45 0"  width="3" height="4" depth="0.02" src="Carteles_Comprimidos/07CARTEL.jpg" cartel-interactivo="cartelas: cartela07"></a-box>
-    <a-box id="cartel08" class="interactivo" data-nombre="Cartel 8" position="-20 2.5 12" rotation="0 -135 0" width="3" height="4" depth="0.02" src="Carteles_Comprimidos/08CARTEL.jpg" cartel-interactivo="cartelas: cartela08a, cartela08b"></a-box>
+    <a-box id="cartel04" class="interactivo" data-nombre="Cartel 4" position="12 1.6 12"  rotation="0 -135 0" width="3" height="4" depth="0.02" src="Carteles_Comprimidos/04CARTEL.jpg" cartel-interactivo="cartelas: cartela04"></a-box>
+    <a-box id="cartel05" class="interactivo" data-nombre="Cartel 5" position="4 1.6 20"   rotation="0 -45 0"  width="3" height="4" depth="0.02" src="Carteles_Comprimidos/05CARTEL.jpg" cartel-interactivo="cartelas: cartela05"></a-box>
+    <a-box id="cartel06" class="interactivo" data-nombre="Cartel 6" position="-4 1.6 12"  rotation="0 -135 0" width="3" height="4" depth="0.02" src="Carteles_Comprimidos/06CARTEL.jpg" cartel-interactivo="cartelas: cartela06"></a-box>
+    <a-box id="cartel07" class="interactivo" data-nombre="Cartel 7" position="-12 1.6 20" rotation="0 -45 0"  width="3" height="4" depth="0.02" src="Carteles_Comprimidos/07CARTEL.jpg" cartel-interactivo="cartelas: cartela07"></a-box>
+    <a-box id="cartel08" class="interactivo" data-nombre="Cartel 8" position="-20 1.6 12" rotation="0 -135 0" width="3" height="4" depth="0.02" src="Carteles_Comprimidos/08CARTEL.jpg" cartel-interactivo="cartelas: cartela08a, cartela08b"></a-box>
 
     <!-- ══ CARTELAS (ocultas; se colocan junto a su cartel al activarlo) ══ -->
+    <!-- Cartela del cartel de inicio: cómo hacer el recorrido (versión app) -->
+    <a-image id="cartela00"  src="Carteles_Comprimidos/recorrido_00-INICIO-APP.jpg" width="1.14" height="3.2" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
     <a-image id="cartela01"  src="Carteles_Comprimidos/01CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
     <a-image id="cartela02"  src="Carteles_Comprimidos/02CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
     <a-image id="cartela03"  src="Carteles_Comprimidos/03CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
@@ -609,6 +616,16 @@
     }
     document.addEventListener('touchstart', desbloquearAudio, { passive: true });
     document.addEventListener('click',      desbloquearAudio);
+
+    /* Aviso inicial */
+    document.querySelector('a-scene').addEventListener('loaded', function () {
+      setTimeout(function () {
+        var t = document.getElementById('toast');
+        showToast('Apunta al cartel de inicio y pulsa INTERACTUAR');
+        clearTimeout(t._tid);
+        t._tid = setTimeout(function () { t.classList.remove('show'); }, 6000);
+      }, 1200);
+    });
 
     /* Pausar la música si la pestaña pasa a segundo plano */
     document.addEventListener('visibilitychange', function () {
