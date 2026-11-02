@@ -301,6 +301,70 @@
     }
     #toast.show { opacity: 1; }
   </style>
+    <!-- ══ COLISIONES con los modelos (Puerta de Alcalá, Carmen, carteles) ══
+         Cada obstáculo es un <a-entity colisionador> invisible (sin geometría, no gasta GPU).
+         El componente "colisiones" va en lo que se mueve (rig o cámara) y empuja al visitante
+         fuera de cualquier obstáculo. Funciona con joystick, teclado y caminando con gafas VR. -->
+    <script>
+      AFRAME.registerComponent('colisionador', {
+        schema: {
+          forma: {default: 'caja'},   // 'caja' o 'circulo'
+          ancho: {default: 1},        // caja: medida en X local (m)
+          fondo: {default: 1},        // caja: medida en Z local (m)
+          radio: {default: 0.5},      // círculo
+          alto:  {default: 40}        // altura del obstáculo (centrada en su posición)
+        },
+        init: function () { this.el.sceneEl.colisionadores = (this.el.sceneEl.colisionadores || []).concat(this); },
+        remove: function () { var l = this.el.sceneEl.colisionadores || []; l.splice(l.indexOf(this), 1); }
+      });
+
+      AFRAME.registerComponent('colisiones', {
+        schema: {
+          radio:  {default: 0.35},   // "grosor" del visitante
+          cuerpo: {default: 1.7}     // altura del cuerpo por debajo de los ojos
+        },
+        init: function () {
+          this.cam = new THREE.Vector3();
+          this.c = new THREE.Vector3();
+        },
+        tick: function () { this.resolver(); },
+        tock: function () { this.resolver(); },
+        resolver: function () {
+          var lista = this.el.sceneEl.colisionadores;
+          if (!lista || !lista.length) return;
+          var camEl = this.el.hasAttribute('camera') ? this.el : this.el.querySelector('[camera]');
+          if (!camEl) return;
+          var R = this.data.radio, mover = this.el.object3D.position;
+          for (var pasada = 0; pasada < 2; pasada++) {
+            camEl.object3D.getWorldPosition(this.cam);
+            var pieY = this.cam.y - this.data.cuerpo, cabezaY = this.cam.y + 0.1;
+            for (var i = 0; i < lista.length; i++) {
+              var col = lista[i], d = col.data, o = col.el.object3D;
+              o.getWorldPosition(this.c);
+              var mitadAlto = d.alto / 2;
+              if (cabezaY < this.c.y - mitadAlto || pieY > this.c.y + mitadAlto) continue;
+              var dx = this.cam.x - this.c.x, dz = this.cam.z - this.c.z, ex = 0, ez = 0;
+              if (d.forma === 'circulo') {
+                var r = d.radio + R, dist = Math.sqrt(dx * dx + dz * dz);
+                if (dist >= r) continue;
+                if (dist < 1e-4) { dx = 1; dist = 1; }
+                ex = dx / dist * (r - dist); ez = dz / dist * (r - dist);
+              } else {
+                var yaw = o.rotation.y, cs = Math.cos(yaw), sn = Math.sin(yaw);
+                var lx =  cs * dx - sn * dz, lz = sn * dx + cs * dz;      // a coordenadas locales
+                var hx = d.ancho / 2 + R, hz = d.fondo / 2 + R;
+                if (Math.abs(lx) >= hx || Math.abs(lz) >= hz) continue;
+                var px = hx - Math.abs(lx), pz = hz - Math.abs(lz), mx = 0, mz = 0;
+                if (px < pz) mx = (lx >= 0 ? 1 : -1) * px; else mz = (lz >= 0 ? 1 : -1) * pz;
+                ex = cs * mx + sn * mz; ez = -sn * mx + cs * mz;            // de vuelta al mundo
+              }
+              mover.x += ex; mover.z += ez;
+              this.cam.x += ex; this.cam.z += ez;
+            }
+          }
+        }
+      });
+    </script>
 </head>
 <body>
 
@@ -485,7 +549,7 @@
     <a-sky src="Carteles_Comprimidos/cielo-nocturno.jpg"></a-sky>
 
     <!-- ══ CÁMARA (mismo esquema que Espacios Liminales) ══ -->
-    <a-entity id="rig" position="0 0 0" mobile-movement>
+    <a-entity id="rig" position="0 0 0" mobile-movement colisiones>
       <a-camera id="camera"
                 position="0 1.6 0"
                 camera="userHeight: 0"
@@ -496,7 +560,33 @@
       </a-camera>
     </a-entity>
 
-  </a-scene>
+  
+    <!-- ══ OBSTÁCULOS INVISIBLES (colisiones) ══ -->
+    <a-entity id="colisiones">
+      <!-- Puerta de Alcalá: un bloque por pilar; los arcos quedan libres -->
+      <a-entity position="-21.75 10 -0.25" colisionador="ancho: 3.5; fondo: 7.5; alto: 40"></a-entity> <!-- Pilar 1 (puerta pequeña izq.) -->
+      <a-entity position="-15.75 10 -0.25" colisionador="ancho: 3.5; fondo: 7.5; alto: 40"></a-entity> <!-- Pilar 2 -->
+      <a-entity position="-5.75 10 0.5" colisionador="ancho: 7.5; fondo: 12; alto: 40"></a-entity> <!-- Pilar 3 (arco central izq.) -->
+      <a-entity position="6.5 10 0.25" colisionador="ancho: 7; fondo: 12.5; alto: 40"></a-entity> <!-- Pilar 4 (arco central dcha.) -->
+      <a-entity position="16.25 10 -0.5" colisionador="ancho: 3.5; fondo: 7; alto: 40"></a-entity> <!-- Pilar 5 -->
+      <a-entity position="22.25 10 -0.5" colisionador="ancho: 3.5; fondo: 7; alto: 40"></a-entity> <!-- Pilar 6 (puerta pequeña dcha.) -->
+      <!-- Carmen de Burgos -->
+      <a-entity position="1.6 1.2 -5" colisionador="forma: circulo; radio: 0.45; alto: 2"></a-entity>
+      <!-- Carteles -->
+      <a-entity position="6 1.6 -12" rotation="0 225 0" colisionador="ancho: 3.2; fondo: 0.4; alto: 4.2"></a-entity> <!-- cartel 01 -->
+      <a-entity position="14 1.6 -20" rotation="0 -45 0" colisionador="ancho: 3.2; fondo: 0.4; alto: 4.2"></a-entity> <!-- cartel 02 -->
+      <a-entity position="22 1.6 -12" rotation="0 225 0" colisionador="ancho: 3.2; fondo: 0.4; alto: 4.2"></a-entity> <!-- cartel 03 -->
+      <a-entity position="12 1.6 12" rotation="0 -135 0" colisionador="ancho: 3.2; fondo: 0.4; alto: 4.2"></a-entity> <!-- cartel 04 -->
+      <a-entity position="4 1.6 20" rotation="0 -45 0" colisionador="ancho: 3.2; fondo: 0.4; alto: 4.2"></a-entity> <!-- cartel 05 -->
+      <a-entity position="-4 1.6 12" rotation="0 -135 0" colisionador="ancho: 3.2; fondo: 0.4; alto: 4.2"></a-entity> <!-- cartel 06 -->
+      <a-entity position="-12 1.6 20" rotation="0 -45 0" colisionador="ancho: 3.2; fondo: 0.4; alto: 4.2"></a-entity> <!-- cartel 07 -->
+      <a-entity position="-20 1.6 12" rotation="0 -135 0" colisionador="ancho: 3.2; fondo: 0.4; alto: 4.2"></a-entity> <!-- cartel 08 -->
+      <a-entity position="-20 1.6 -12" rotation="0 225 0" colisionador="ancho: 3.2; fondo: 0.4; alto: 4.2"></a-entity> <!-- cartel 09 -->
+      <a-entity position="-12 1.6 -20" rotation="0 -45 0" colisionador="ancho: 3.2; fondo: 0.4; alto: 4.2"></a-entity> <!-- cartel 10 -->
+      <a-entity position="-4 1.6 -12" rotation="0 225 0" colisionador="ancho: 3.2; fondo: 0.4; alto: 4.2"></a-entity> <!-- cartel 11 -->
+    </a-entity>
+
+    </a-scene>
 
   <script>
     /* ── JOYSTICK ── */
