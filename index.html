@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
+  <title>Galería Colombine · Móvil</title>
+
+  <script src="https://aframe.io/releases/1.7.1/aframe.min.js"></script>
+  <script src="https://unpkg.com/aframe-event-set-component@5.x.x/dist/aframe-event-set-component.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.5.4/dist/aframe-extras.min.js"></script>
+
+  <!-- ══ COMPONENTES A-FRAME — DEBEN IR ANTES DE <a-scene> ══ -->
+  <script>
+    /* ───────── Joystick (variables compartidas) ───────── */
+    var JOY_R     = 37;
+    var SPEED     = 0.065;
+    var LIMITE    = 66;      // radio máximo de paseo (los paneles de cierre están a ~70 m)
+    var joyActive = false;
+    var joyDx = 0, joyDy = 0;
+    var teclas = {};         // teclado en escritorio (WASD / flechas)
+
+    /* ───────── Movimiento con joystick (igual que en Espacios Liminales) ───────── */
+    AFRAME.registerComponent('mobile-movement', {
+      tick: function () {
+        var nx = 0, ny = 0;
+        if (joyActive) { nx = joyDx / JOY_R; ny = joyDy / JOY_R; }
+        /* teclado: solo si no se usa el joystick */
+        if (!joyActive) {
+          if (teclas.KeyW || teclas.ArrowUp)    ny = -1;
+          if (teclas.KeyS || teclas.ArrowDown)  ny =  1;
+          if (teclas.KeyA || teclas.ArrowLeft)  nx = -1;
+          if (teclas.KeyD || teclas.ArrowRight) nx =  1;
+        }
+        if (Math.abs(nx) < 0.05 && Math.abs(ny) < 0.05) return;
+
+        var camEl = this.el.querySelector('[camera]');
+        if (!camEl) return;
+
+        var euler = new THREE.Euler();
+        euler.setFromQuaternion(camEl.object3D.getWorldQuaternion(new THREE.Quaternion()), 'YXZ');
+        var sinA = Math.sin(euler.y), cosA = Math.cos(euler.y);
+
+        var pos = this.el.object3D.position;
+        pos.x += sinA * ny * SPEED;
+        pos.z += cosA * ny * SPEED;
+        pos.x += cosA * nx * SPEED;
+        pos.z += (-sinA) * nx * SPEED;
+
+        /* No salir de la glorieta */
+        var d = Math.sqrt(pos.x * pos.x + pos.z * pos.z);
+        if (d > LIMITE) { pos.x *= LIMITE / d; pos.z *= LIMITE / d; }
+      }
+    });
+
+    /* ───────── Cartel interactivo ─────────
+       Al activarse:
+         · el cartel se ilumina con un marco de luz pulsante
+         · aparece(n) su(s) cartela(s) junto al cartel, en el lado desde el que se mira
+       Cartel: 3 × 4 m.  Cartela: 2,14 × 3 m (proporción real de las imágenes). */
+    var CARTEL_ANCHO = 3, CARTEL_ALTO = 4;
+    var CARTELA_ANCHO = 2.14;
+    var COLOR_LUZ = '#FFC65D';
+    var cartelActivo = null;
+
+    AFRAME.registerComponent('cartel-interactivo', {
+      schema: {
+        cartelas: {type: 'array'},          // ids de las cartelas asociadas
+        color:    {default: COLOR_LUZ}
+      },
+
+      init: function () {
+        this.activo = false;
+        this.marco = [];
+        var w = CARTEL_ANCHO, h = CARTEL_ALTO, self = this;
+
+        /* Dos capas: filo intenso + halo suave. Están FUERA del área del cartel,
+           en su mismo plano, así se ven desde ambas caras sin tapar la imagen. */
+        [[0.12, 1.0], [0.3, 0.3]].forEach(function (capa) {
+          var t = capa[0], op = capa[1];
+          var barras = [
+            {x: 0,             y:  h / 2 + t / 2, w: w + 2 * t, h: t},  // arriba
+            {x: 0,             y: -h / 2 - t / 2, w: w + 2 * t, h: t},  // abajo
+            {x: -w / 2 - t / 2, y: 0,             w: t,         h: h},  // izquierda
+            {x:  w / 2 + t / 2, y: 0,             w: t,         h: h}   // derecha
+          ];
+          barras.forEach(function (b) {
+            var p = document.createElement('a-plane');
+            p.setAttribute('width', b.w);
+            p.setAttribute('height', b.h);
+            p.setAttribute('position', b.x + ' ' + b.y + ' 0');
+            p.setAttribute('material', {shader: 'flat', color: self.data.color, side: 'double',
+                                        transparent: true, opacity: op, depthWrite: false});
+            p.setAttribute('visible', false);
+            p.dataset.opBase = op;
+            self.el.appendChild(p);
+            self.marco.push(p);
+          });
+        });
+      },
+
+      alternar: function () { this.activo ? this.desactivar() : this.activar(); },
+
+      activar: function () {
+        if (cartelActivo && cartelActivo !== this) cartelActivo.desactivar();
+        cartelActivo = this;
+        this.activo = true;
+        this.marco.forEach(function (p) { p.setAttribute('visible', true); });
+        this.colocarCartelas();
+      },
+
+      desactivar: function () {
+        this.activo = false;
+        if (cartelActivo === this) cartelActivo = null;
+        this.marco.forEach(function (p) { p.setAttribute('visible', false); });
+        this.data.cartelas.forEach(function (id) {
+          var c = document.getElementById(id);
+          if (c) c.setAttribute('visible', false);
+        });
+      },
+
+      /* Coloca las cartelas junto al cartel, mirando hacia el visitante.
+         1 cartela  → a la derecha del cartel.
+         2 cartelas → una a cada lado. */
+      colocarCartelas: function () {
+        var obj = this.el.object3D;
+        var pos = obj.getWorldPosition(new THREE.Vector3());
+        var yaw = obj.rotation.y;
+
+        /* ¿Desde qué cara se está mirando? */
+        var cam = document.getElementById('camera').object3D.getWorldPosition(new THREE.Vector3());
+        var normal = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+        var haciaCam = cam.clone().sub(pos);
+        if (normal.dot(haciaCam) < 0) yaw += Math.PI;
+
+        var q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+        var lateral = CARTEL_ANCHO / 2 + 0.3 + CARTELA_ANCHO / 2;
+        var lados = this.data.cartelas.length > 1 ? [1, -1] : [1];
+
+        this.data.cartelas.forEach(function (id, i) {
+          var c = document.getElementById(id);
+          if (!c) return;
+          var off = new THREE.Vector3(lateral * lados[i % lados.length], -0.3, 0.1).applyQuaternion(q);
+          c.object3D.position.set(pos.x + off.x, pos.y + off.y, pos.z + off.z);
+          c.object3D.rotation.set(0, yaw, 0);
+          c.setAttribute('visible', true);
+          c.emit('aparecer');
+        });
+      },
+
+      tick: function (t) {
+        if (!this.activo) return;
+        var k = 0.65 + 0.35 * Math.sin(t / 260);   // pulso suave
+        this.marco.forEach(function (p) {
+          var m = p.getObject3D('mesh');
+          if (m) m.material.opacity = p.dataset.opBase * k;
+        });
+      }
+    });
+
+    /* ───────── Saludo de Carmen ─────────
+       Mismo comportamiento que en la galería de escritorio:
+       clic (o botón INTERACTUAR) → gesto de hablar + voz + música de fondo atenuada,
+       y al terminar vuelve a saludar con la mano. */
+    AFRAME.registerComponent('saludo-carmen', {
+      schema: {
+        gesto:  {default: 'Talk_with_Right_Hand_Open'},
+        reposo: {default: 'Wave_One_Hand'},
+        fondo:  {default: 0.3}
+      },
+      init: function () {
+        this.hablando = false;
+        this.el.addEventListener('click', () => this.saludar());
+        this.el.addEventListener('sound-ended', () => this.terminar());
+      },
+      saludar: function () {
+        if (this.hablando) return;
+        const sonido = this.el.components.sound;
+        if (!sonido || !sonido.loaded) return;
+        this.hablando = true;
+        this.bajarFondo(true);
+        this.el.setAttribute('animation-mixer', {clip: this.data.gesto, loop: 'repeat', crossFadeDuration: 0.4});
+        sonido.stopSound();
+        sonido.playSound();
+      },
+      terminar: function () {
+        this.hablando = false;
+        this.bajarFondo(false);
+        this.el.setAttribute('animation-mixer', {clip: this.data.reposo, loop: 'repeat', crossFadeDuration: 0.4});
+      },
+      /* La música de fondo ahora es un <audio> HTML5 (streaming), no un a-sound */
+      bajarFondo: function (bajar) {
+        const musica = document.getElementById('musica');
+        if (!musica) return;
+        if (bajar) { this.volFondo = musica.volume; musica.volume = this.volFondo * this.data.fondo; }
+        else if (this.volFondo !== undefined) { musica.volume = this.volFondo; }
+      }
+    });
+  </script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { overflow: hidden; background: #000; }
+
+    /* ── Joystick ── */
+    #joy-zone {
+      position: fixed; bottom: 28px; left: 20px;
+      width: 120px; height: 120px;
+      z-index: 9999; touch-action: none;
+    }
+    .joy-base {
+      width: 120px; height: 120px; border-radius: 50%;
+      background: rgba(255,255,255,0.13);
+      border: 2px solid rgba(255,255,255,0.4);
+      position: relative;
+    }
+    .joy-thumb {
+      width: 48px; height: 48px; border-radius: 50%;
+      background: rgba(255,255,255,0.55);
+      border: 2px solid rgba(255,255,255,0.9);
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%,-50%);
+      pointer-events: none;
+    }
+
+    /* ── Botón de interacción (sustituye a ENTRAR PORTAL) ── */
+    #btn-interactuar {
+      position: fixed; bottom: 28px; right: 20px;
+      width: 84px; height: 84px; border-radius: 50%;
+      background: rgba(255,198,93,0.22);
+      border: 2px solid rgba(255,198,93,0.9);
+      color: #fff; font-family: sans-serif;
+      font-size: 10.5px; font-weight: bold; letter-spacing: .3px;
+      display: flex; align-items: center; justify-content: center;
+      text-align: center; line-height: 1.3;
+      z-index: 9999; touch-action: manipulation; user-select: none; -webkit-user-select: none;
+      transition: background .2s, box-shadow .2s, transform .1s;
+    }
+    #btn-interactuar.listo {               /* hay algo interactivo en el punto de mira */
+      background: rgba(255,198,93,0.5);
+      box-shadow: 0 0 18px 4px rgba(255,198,93,0.75);
+    }
+    #btn-interactuar:active { transform: scale(0.93); background: rgba(255,198,93,0.7); }
+
+    /* ── Punto de mira ── */
+    #crosshair {
+      position: fixed; top: 50%; left: 50%;
+      transform: translate(-50%,-50%);
+      pointer-events: none; z-index: 9998;
+      transition: transform .15s;
+    }
+    #crosshair svg * { transition: stroke .15s, fill .15s; }
+    #crosshair.sobre { transform: translate(-50%,-50%) scale(1.25); }
+    #crosshair.sobre svg circle, #crosshair.sobre svg line { stroke: #FFC65D; }
+    #crosshair.sobre svg circle.c { fill: #FFC65D; }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed; bottom: 160px; left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.65); color: #fff;
+      font-family: sans-serif; font-size: 14px;
+      padding: 8px 18px; border-radius: 20px;
+      z-index: 9999; opacity: 0; transition: opacity 0.3s;
+      pointer-events: none; white-space: nowrap;
+    }
+    #toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+
+  <!-- JOYSTICK -->
+  <div id="joy-zone">
+    <div class="joy-base" id="joy-base">
+      <div class="joy-thumb" id="joy-thumb"></div>
+    </div>
+  </div>
+
+  <!-- BOTÓN INTERACTUAR -->
+  <div id="btn-interactuar">INTERAC-<br>TUAR</div>
+
+  <!-- PUNTO DE MIRA -->
+  <div id="crosshair">
+    <svg width="34" height="34" viewBox="0 0 34 34">
+      <circle cx="17" cy="17" r="13" fill="none" stroke="white" stroke-width="1.5" opacity="0.75"/>
+      <line x1="17" y1="4"  x2="17" y2="11" stroke="white" stroke-width="1.5" opacity="0.75"/>
+      <line x1="17" y1="23" x2="17" y2="30" stroke="white" stroke-width="1.5" opacity="0.75"/>
+      <line x1="4"  y1="17" x2="11" y2="17" stroke="white" stroke-width="1.5" opacity="0.75"/>
+      <line x1="23" y1="17" x2="30" y2="17" stroke="white" stroke-width="1.5" opacity="0.75"/>
+      <circle class="c" cx="17" cy="17" r="2" fill="white" opacity="0.9"/>
+    </svg>
+  </div>
+
+  <!-- TOAST -->
+  <div id="toast"></div>
+
+  <!-- MÚSICA DE FONDO: <audio> HTML5 en streaming (el mp3 pesa 18 MB;
+       con a-sound se decodificaba entero en memoria y el móvil sufría) -->
+  <audio id="musica" src="Audio Puerta de Alcalá.mp3" loop preload="auto" playsinline></audio>
+
+  <!-- ══════════ ESCENA A-FRAME ══════════ -->
+  <a-scene vr-mode-ui="enabled: true"
+           renderer="antialias: false; colorManagement: true; maxCanvasWidth: 1600; maxCanvasHeight: 1600"
+           gltf-model="dracoDecoderPath: https://www.gstatic.com/draco/versioned/decoders/1.5.7/">
+
+    <a-assets timeout="8000">
+      <a-asset-item id="glb-puerta" src="puerta_de_alcala_madrid_movil.glb"></a-asset-item>
+      <a-asset-item id="glb-carmen" src="victorian_elegance.glb"></a-asset-item>
+    </a-assets>
+
+    <!-- Glorieta -->
+    <a-cylinder src="Carteles_Comprimidos/Rotonda-Interior-def.jpg"
+      position="0 -0.55 -3" scale="75 0 75" radius="0.5" height="1.5" color="#ffffff"></a-cylinder>
+    <a-cylinder src="Carteles_Comprimidos/Rotonda-Exterior-def.jpg"
+      position="0 -0.80 -3" rotation="0 35 0" scale="150 0 150" radius="0.5" height="1.5" color="#ffffff"></a-cylinder>
+
+    <!-- Suelo -->
+    <a-plane position="0 -0.85 -4" rotation="-90 0 0" width="200" height="200" color="#787878"></a-plane>
+
+    <!-- ══ SEÑALÉTICA (se lee al apuntar con el punto de mira) ══ -->
+
+    <!-- Cartel de inicio -->
+    <a-cylinder position="0 0.60 -6" radius="0.5" height="1.50" material="color: #83632b" scale="-0.070 0.740 0.130"></a-cylinder>
+    <a-box class="hover" position="0 1.60 -6" rotation="0 90 0" material="color: #f1bb5c" scale="0.10 0.97 1"
+      src="Carteles_Comprimidos/FP-LOGO-estable.jpg"
+      event-set__enter="_event: mouseenter; _target: #textoInicio; visible: true"
+      event-set__leave="_event: mouseleave; _target: #textoInicio; visible: false"></a-box>
+    <a-text id="textoInicio"
+      value="INICIO: Bienvenido a la muestra virtual CBS. Sigue las flechas, apunta a los carteles y pulsa INTERACTUAR para descubrir cosas sobre Carmen de Burgos."
+      align="center" color="#FFF" visible="false" position="0 2.9 -6" width="6" geometry="primitive: plane; width: 6.4; height: auto" material="shader: flat; color: #000; opacity: 0.55; transparent: true"></a-text>
+
+    <!-- Infografía de inicio -->
+    <a-box position="0 1.65 -5" width="1" height="2" depth="0.02" src="Carteles_Comprimidos/recorrido_00-INICIO.jpg"></a-box>
+
+    <!-- Flecha 1 -->
+    <a-cylinder position="0 0 -20" radius="0.5" height="1.5" material="color: #83632b" scale="-0.070 0.740 0.130"></a-cylinder>
+    <a-box class="hover" position="0 1 -20" rotation="0 90 0" material="color: #f1bb5c" scale="0.10 0.97 1" src="Carteles_Comprimidos/flecha_derecha.jpg"
+      event-set__enter="_event: mouseenter; _target: #boxText12; visible: true"
+      event-set__leave="_event: mouseleave; _target: #boxText12; visible: false"></a-box>
+    <a-text id="boxText12" value="Apunta a los carteles y pulsa INTERACTUAR para aprender sobre Carmen de Burgos y su legado."
+      align="center" color="#FFF" visible="false" position="0 2 -20" width="6" geometry="primitive: plane; width: 6.4; height: auto" material="shader: flat; color: #000; opacity: 0.55; transparent: true"></a-text>
+
+    <!-- Flecha 2 -->
+    <a-cylinder position="35 0 -13" radius="0.5" height="1.5" material="color: #83632b" scale="-0.070 0.740 0.130"></a-cylinder>
+    <a-box class="hover" position="35 1 -13" rotation="0 -180 0" material="color: #f1bb5c" scale="0.10 0.97 1" src="Carteles_Comprimidos/flecha_derecha.jpg"
+      event-set__enter="_event: mouseenter; _target: #boxText13; visible: true"
+      event-set__leave="_event: mouseleave; _target: #boxText13; visible: false"></a-box>
+    <a-text id="boxText13" value="Camina con la siguiente galeria de carteles."
+      align="center" color="#FFF" visible="false" position="33 2 -13" rotation="0 -90 0" width="6" geometry="primitive: plane; width: 6.4; height: auto" material="shader: flat; color: #000; opacity: 0.55; transparent: true"></a-text>
+
+    <!-- Flecha 3 -->
+    <a-cylinder position="31 0 14" radius="0.5" height="1.5" material="color: #83632b" scale="-0.070 0.740 0.130"></a-cylinder>
+    <a-box class="hover" position="31 1 14" rotation="0 -90 0" material="color: #f1bb5c" scale="0.10 0.97 1" src="Carteles_Comprimidos/flecha_derecha.jpg"
+      event-set__enter="_event: mouseenter; _target: #boxText14; visible: true"
+      event-set__leave="_event: mouseleave; _target: #boxText14; visible: false"></a-box>
+    <a-text id="boxText14" value="Sigue hacia la proxima galeria de carteles."
+      align="center" color="#FFF" visible="false" position="31 2 14" rotation="0 180 0" width="6" geometry="primitive: plane; width: 6.4; height: auto" material="shader: flat; color: #000; opacity: 0.55; transparent: true"></a-text>
+
+    <!-- Flecha 4 -->
+    <a-cylinder position="-33 0 12" radius="0.5" height="1.5" material="color: #83632b" scale="-0.070 0.740 0.130"></a-cylinder>
+    <a-box class="hover" position="-33 1 12" rotation="0 -180 0" material="color: #f1bb5c" scale="0.10 0.97 1" src="Carteles_Comprimidos/flecha_derecha.jpg"
+      event-set__enter="_event: mouseenter; _target: #boxText15; visible: true"
+      event-set__leave="_event: mouseleave; _target: #boxText15; visible: false"></a-box>
+    <a-text id="boxText15" value="No te vayas."
+      align="center" color="#FFF" visible="false" position="-33 2 12" rotation="0 90 0" width="6" geometry="primitive: plane; width: 6.4; height: auto" material="shader: flat; color: #000; opacity: 0.55; transparent: true"></a-text>
+
+    <!-- Flecha 5 -->
+    <a-cylinder position="-32 0 -15" radius="0.5" height="1.5" material="color: #83632b" scale="-0.070 0.740 0.130"></a-cylinder>
+    <a-box class="hover" position="-32 1 -15" rotation="0 -90 0" material="color: #f1bb5c" scale="0.10 0.97 1" src="Carteles_Comprimidos/flecha_derecha.jpg"
+      event-set__enter="_event: mouseenter; _target: #boxText16; visible: true"
+      event-set__leave="_event: mouseleave; _target: #boxText16; visible: false"></a-box>
+    <a-text id="boxText16" value="Sigue, ya falta poco."
+      align="center" color="#FFF" visible="false" position="-32 2 -15" width="6" geometry="primitive: plane; width: 6.4; height: auto" material="shader: flat; color: #000; opacity: 0.55; transparent: true"></a-text>
+
+    <!-- ══ CARTELES INTERACTIVOS ══
+         Apunta al cartel + botón INTERACTUAR → el cartel se ilumina y aparece su cartela.
+         Ya no hay cajas: la interacción es directa con el cartel. -->
+
+    <!-- Galería sur (z = -12 / -20) -->
+    <a-image id="cartel01" class="interactivo" data-nombre="Cartel 1" position="6 2.5 -12"   rotation="0 225 0" src="Carteles_Comprimidos/01CARTEL.jpg" width="3" height="4" cartel-interactivo="cartelas: cartela01"></a-image>
+    <a-image id="cartel02" class="interactivo" data-nombre="Cartel 2" position="14 2.5 -20"  rotation="0 -45 0" src="Carteles_Comprimidos/02CARTEL.jpg" width="3" height="4" cartel-interactivo="cartelas: cartela02"></a-image>
+    <a-image id="cartel03" class="interactivo" data-nombre="Cartel 3" position="22 2.5 -12"  rotation="0 225 0" src="Carteles_Comprimidos/03CARTEL.jpg" width="3" height="4" cartel-interactivo="cartelas: cartela03"></a-image>
+    <a-image id="cartel09" class="interactivo" data-nombre="Cartel 9" position="-20 2.5 -12" rotation="0 225 0" src="Carteles_Comprimidos/09CARTEL.jpg" width="3" height="4" cartel-interactivo="cartelas: cartela09"></a-image>
+    <a-image id="cartel10" class="interactivo" data-nombre="Cartel 10" position="-12 2.5 -20" rotation="0 -45 0" src="Carteles_Comprimidos/10CARTEL.jpg" width="3" height="4" cartel-interactivo="cartelas: cartela10"></a-image>
+    <a-image id="cartel11" class="interactivo" data-nombre="Cartel 11" position="-4 2.5 -12"  rotation="0 225 0" src="Carteles_Comprimidos/11CARTEL.jpg" width="3" height="4" cartel-interactivo="cartelas: cartela11"></a-image>
+
+    <!-- Galería norte (z = 12 / 20) — se ven por ambas caras -->
+    <a-box id="cartel04" class="interactivo" data-nombre="Cartel 4" position="12 2.5 12"  rotation="0 -135 0" width="3" height="4" depth="0.02" src="Carteles_Comprimidos/04CARTEL.jpg" cartel-interactivo="cartelas: cartela04"></a-box>
+    <a-box id="cartel05" class="interactivo" data-nombre="Cartel 5" position="4 2.5 20"   rotation="0 -45 0"  width="3" height="4" depth="0.02" src="Carteles_Comprimidos/05CARTEL.jpg" cartel-interactivo="cartelas: cartela05"></a-box>
+    <a-box id="cartel06" class="interactivo" data-nombre="Cartel 6" position="-4 2.5 12"  rotation="0 -135 0" width="3" height="4" depth="0.02" src="Carteles_Comprimidos/06CARTEL.jpg" cartel-interactivo="cartelas: cartela06"></a-box>
+    <a-box id="cartel07" class="interactivo" data-nombre="Cartel 7" position="-12 2.5 20" rotation="0 -45 0"  width="3" height="4" depth="0.02" src="Carteles_Comprimidos/07CARTEL.jpg" cartel-interactivo="cartelas: cartela07"></a-box>
+    <a-box id="cartel08" class="interactivo" data-nombre="Cartel 8" position="-20 2.5 12" rotation="0 -135 0" width="3" height="4" depth="0.02" src="Carteles_Comprimidos/08CARTEL.jpg" cartel-interactivo="cartelas: cartela08a, cartela08b"></a-box>
+
+    <!-- ══ CARTELAS (ocultas; se colocan junto a su cartel al activarlo) ══ -->
+    <a-image id="cartela01"  src="Carteles_Comprimidos/01CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image id="cartela02"  src="Carteles_Comprimidos/02CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image id="cartela03"  src="Carteles_Comprimidos/03CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image id="cartela04"  src="Carteles_Comprimidos/04CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image id="cartela05"  src="Carteles_Comprimidos/05CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image id="cartela06"  src="Carteles_Comprimidos/06CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image id="cartela07"  src="Carteles_Comprimidos/07CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image id="cartela08a" src="Carteles_Comprimidos/08CARTELA-2.jpg" width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image id="cartela08b" src="Carteles_Comprimidos/08CARTELA-1.jpg" width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image id="cartela09"  src="Carteles_Comprimidos/09CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image id="cartela10"  src="Carteles_Comprimidos/10CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image id="cartela11"  src="Carteles_Comprimidos/11CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+
+    <!-- Planos de cierre -->
+    <a-plane src="Carteles_Comprimidos/Logo-CBS-Nuevo.jpg"                 position="-17 12 -75" rotation="0 17 0"    scale="45 30 1"></a-plane>
+    <a-plane src="Carteles_Comprimidos/FP-LOGO-estable.jpg"                position="-72 12 -20" rotation="0 72 0"    scale="45 30 1"></a-plane>
+    <a-plane src="Carteles_Comprimidos/Mueseo_Prado_compress.jpg"          position="-50 12 -55" rotation="0 50 0"    scale="45 30 1"></a-plane>
+    <a-plane src="Carteles_Comprimidos/Puerta_del_sol_compress.jpg"        position="-70 12 20"  rotation="0 110 0"   scale="45 30 1"></a-plane>
+    <a-plane src="Carteles_Comprimidos/Logo-CBS-Nuevo-Panel-5.jpg"         position="-50 12 50"  rotation="0 145 0"   scale="45 30 1"></a-plane>
+    <a-plane src="Carteles_Comprimidos/Calle-Alcal-1.jpg"                  position="-13 12 65"  rotation="0 175 0"   scale="45 30 1"></a-plane>
+    <a-plane src="Carteles_Comprimidos/LOGO-FP-CBS-2-page-0001.jpg"        position="24 12 65"   rotation="0 190 0"   scale="45 30 1"></a-plane>
+    <a-plane src="Carteles_Comprimidos/Gran_Via_compress.jpg"              position="50 12 45"   rotation="0 230 0"   scale="45 30 1"></a-plane>
+    <a-plane src="Carteles_Comprimidos/FP-LOGO-estable.jpg"                position="67 12 7"    rotation="0 260 0"   scale="45 30 1"></a-plane>
+    <a-plane src="Carteles_Comprimidos/Inicio-calle-Alcala-1928-1.jpg"     position="70 12 -25"  rotation="0 277 0"   scale="45 30 1"></a-plane>
+    <a-plane src="Carteles_Comprimidos/Logo-CBS-Nuevo.jpg"                 position="50 12 -55"  rotation="0 320 0"   scale="45 30 1"></a-plane>
+    <a-plane src="Carteles_Comprimidos/Cibeles_compress.jpg"               position="17 12 -76.5" rotation="0 336.5 0" scale="45 30 1"></a-plane>
+
+    <!-- ══ CARMEN DE BURGOS (misma interacción que en escritorio) ══ -->
+    <a-entity id="victorian"
+      gltf-model="#glb-carmen"
+      animation-mixer="clip: Wave_One_Hand; loop: repeat"
+      position="1.6 0.40 -5" rotation="0 -18 0" scale="1 1 1"
+      sound="src: url(saludo_carmen.mp3); autoplay: false; positional: true; refDistance: 3; volume: 2"
+      saludo-carmen>
+      <!-- Zona de interacción invisible -->
+      <a-cylinder class="clickable interactivo" data-nombre="Carmen de Burgos"
+        position="0 0.85 0" radius="0.35" height="1.75"
+        material="opacity: 0; transparent: true; depthWrite: false"
+        event-set__enter="_event: raycaster-intersected; _target: #pistaCarmen; visible: true"
+        event-set__leave="_event: raycaster-intersected-cleared; _target: #pistaCarmen; visible: false"></a-cylinder>
+      <a-text id="pistaCarmen" value="Pulsa INTERACTUAR para saludar" align="center" color="#FFF"
+        position="0 1.95 0" width="3" visible="false"></a-text>
+    </a-entity>
+
+    <!-- Puerta de Alcalá (texturas JPEG en lugar de WebP) -->
+    <a-gltf-model src="#glb-puerta"></a-gltf-model>
+
+    <!-- Cielo -->
+    <a-sky src="Carteles_Comprimidos/cielo-nocturno.jpg"></a-sky>
+
+    <!-- ══ CÁMARA (mismo esquema que Espacios Liminales) ══ -->
+    <a-entity id="rig" position="0 0 0" mobile-movement>
+      <a-camera id="camera"
+                position="0 1.6 0"
+                camera="userHeight: 0"
+                look-controls="touchEnabled: true; magicWindowTrackingEnabled: false; pointerLockEnabled: true; reverseTouchDrag: true"
+                wasd-controls="enabled: false">
+        <a-cursor id="cursor" color="#FFC65D" fuse="false"
+                  raycaster="objects: .interactivo, .hover; far: 16"></a-cursor>
+      </a-camera>
+    </a-entity>
+
+  </a-scene>
+
+  <script>
+    /* ── JOYSTICK ── */
+    var joyBase  = document.getElementById('joy-base');
+    var joyThumb = document.getElementById('joy-thumb');
+
+    function joyPos(touch) {
+      var r = joyBase.getBoundingClientRect();
+      return { x: touch.clientX - r.left - r.width / 2,
+               y: touch.clientY - r.top  - r.height / 2 };
+    }
+    joyBase.addEventListener('touchstart', function (e) { e.preventDefault(); joyActive = true; }, { passive: false });
+    joyBase.addEventListener('touchmove', function (e) {
+      e.preventDefault();
+      if (!joyActive) return;
+      var p = joyPos(e.touches[0]);
+      var d = Math.sqrt(p.x * p.x + p.y * p.y);
+      var c = d > JOY_R ? JOY_R / d : 1;
+      joyDx = p.x * c;
+      joyDy = p.y * c;
+      joyThumb.style.transform = 'translate(calc(-50% + ' + joyDx + 'px), calc(-50% + ' + joyDy + 'px))';
+    }, { passive: false });
+    function joyFin(e) {
+      e.preventDefault();
+      joyActive = false; joyDx = 0; joyDy = 0;
+      joyThumb.style.transform = 'translate(-50%,-50%)';
+    }
+    joyBase.addEventListener('touchend', joyFin, { passive: false });
+    joyBase.addEventListener('touchcancel', joyFin, { passive: false });
+
+    /* ── TOAST ── */
+    function showToast(msg) {
+      var t = document.getElementById('toast');
+      t.textContent = msg;
+      t.classList.add('show');
+      clearTimeout(t._tid);
+      t._tid = setTimeout(function () { t.classList.remove('show'); }, 2200);
+    }
+
+    /* ── ¿QUÉ HAY EN EL PUNTO DE MIRA? ──
+       Usa el raycaster del a-cursor (centro de la pantalla). */
+    var cursorEl = document.getElementById('cursor');
+    function objetivoActual() {
+      var cur = cursorEl.components && cursorEl.components.cursor;
+      var el = cur && cur.intersectedEl;
+      while (el && el.classList && !el.classList.contains('interactivo')) el = el.parentEl;
+      return (el && el.classList && el.classList.contains('interactivo')) ? el : null;
+    }
+
+    /* ── INTERACTUAR ── */
+    function interactuar() {
+      var el = objetivoActual();
+      if (!el) { showToast('Apunta a un cartel o a Carmen'); return; }
+
+      /* Carmen de Burgos → saludo */
+      if (el.closest('#victorian')) {
+        var s = document.getElementById('victorian').components['saludo-carmen'];
+        if (s) s.saludar();
+        return;
+      }
+      /* Cartel → iluminar + cartela */
+      var comp = el.components['cartel-interactivo'];
+      if (comp) comp.alternar();
+    }
+
+    var btn = document.getElementById('btn-interactuar');
+    btn.addEventListener('touchstart', function (e) { e.preventDefault(); desbloquearAudio(); interactuar(); }, { passive: false });
+    btn.addEventListener('click', function () { interactuar(); });
+
+    /* Teclado (escritorio): E / Espacio / Intro para interactuar, WASD para andar */
+    document.addEventListener('keydown', function (e) {
+      teclas[e.code] = true;
+      if (e.code === 'KeyE' || e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); desbloquearAudio(); interactuar(); }
+    });
+    document.addEventListener('keyup', function (e) { teclas[e.code] = false; });
+
+    /* ── Realimentación visual del punto de mira + cierre automático ── */
+    var crosshair = document.getElementById('crosshair');
+    setInterval(function () {
+      var hay = !!objetivoActual();
+      crosshair.classList.toggle('sobre', hay);
+      btn.classList.toggle('listo', hay);
+
+      /* Si te alejas mucho de un cartel encendido, se apaga solo */
+      if (cartelActivo) {
+        var cam = document.getElementById('camera').object3D.getWorldPosition(new THREE.Vector3());
+        var p   = cartelActivo.el.object3D.getWorldPosition(new THREE.Vector3());
+        if (cam.distanceTo(p) > 20) cartelActivo.desactivar();
+      }
+    }, 120);
+
+    /* ── DESBLOQUEO DE AUDIO EN MÓVIL ── */
+    var audioDesbloqueado = false;
+    function desbloquearAudio() {
+      if (audioDesbloqueado) return;
+      audioDesbloqueado = true;
+      var ctx = THREE.AudioContext ? THREE.AudioContext.getContext() : null;
+      if (ctx && ctx.state === 'suspended') ctx.resume();
+      var m = document.getElementById('musica');
+      m.volume = 0.8;
+      var p = m.play();
+      if (p && p.catch) p.catch(function () { audioDesbloqueado = false; });
+    }
+    document.addEventListener('touchstart', desbloquearAudio, { passive: true });
+    document.addEventListener('click',      desbloquearAudio);
+
+    /* Pausar la música si la pestaña pasa a segundo plano */
+    document.addEventListener('visibilitychange', function () {
+      var m = document.getElementById('musica');
+      if (document.hidden) m.pause(); else if (audioDesbloqueado) m.play().catch(function(){});
+    });
+  </script>
+
+</body>
+</html>
