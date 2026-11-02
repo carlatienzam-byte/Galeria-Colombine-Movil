@@ -18,10 +18,24 @@
     var joyActive = false;
     var joyDx = 0, joyDy = 0;
     var teclas = {};         // teclado en escritorio (WASD / flechas)
+    var vertDir = 0;         // -1 bajar, 0 quieto, +1 subir (botones ▲ ▼)
+    var VERT_SPEED = 1.5;     // metros por segundo
+    var ALTURA_MIN = 0.2, ALTURA_MAX = 15;   // altura de la cámara (m) dentro del rig
 
     /* ───────── Movimiento con joystick (igual que en Espacios Liminales) ───────── */
     AFRAME.registerComponent('mobile-movement', {
-      tick: function () {
+      tick: function (t, dt) {
+        /* Subir / bajar la cámara (botones ▲ ▼, o R / F en el teclado) */
+        var v = vertDir;
+        if (!v) { if (teclas.KeyR) v = 1; else if (teclas.KeyF) v = -1; }
+        if (v) {
+          var cam = this.el.querySelector('[camera]');
+          if (cam) {
+            var y = cam.object3D.position.y + v * VERT_SPEED * Math.min(dt || 16, 100) / 1000;
+            cam.object3D.position.y = Math.min(ALTURA_MAX, Math.max(ALTURA_MIN, y));
+          }
+        }
+
         var nx = 0, ny = 0;
         if (joyActive) { nx = joyDx / JOY_R; ny = joyDy / JOY_R; }
         /* teclado: solo si no se usa el joystick */
@@ -241,6 +255,22 @@
     }
     #btn-interactuar:active { transform: scale(0.93); background: rgba(255,198,93,0.7); }
 
+    /* ── Botones subir / bajar (como en Espacios Liminales) ── */
+    #vert-btns {
+      position: fixed; bottom: 28px; right: 118px;
+      display: flex; flex-direction: column; gap: 8px;
+      z-index: 9999;
+    }
+    .vert-btn {
+      width: 52px; height: 52px; border-radius: 50%;
+      background: rgba(255,255,255,0.15);
+      border: 2px solid rgba(255,255,255,0.5);
+      color: #fff; font-size: 22px;
+      display: flex; align-items: center; justify-content: center;
+      touch-action: none; user-select: none; -webkit-user-select: none; cursor: pointer;
+    }
+    .vert-btn:active, .vert-btn.pulsado { background: rgba(255,255,255,0.35); }
+
     /* ── Punto de mira ── */
     #crosshair {
       position: fixed; top: 50%; left: 50%;
@@ -273,6 +303,12 @@
     <div class="joy-base" id="joy-base">
       <div class="joy-thumb" id="joy-thumb"></div>
     </div>
+  </div>
+
+  <!-- BOTONES SUBIR / BAJAR -->
+  <div id="vert-btns">
+    <div class="vert-btn" id="btn-up">&#9650;</div>
+    <div class="vert-btn" id="btn-down">&#9660;</div>
   </div>
 
   <!-- BOTÓN INTERACTUAR -->
@@ -483,6 +519,20 @@
     }
     joyBase.addEventListener('touchend', joyFin, { passive: false });
     joyBase.addEventListener('touchcancel', joyFin, { passive: false });
+
+    /* ── BOTONES SUBIR / BAJAR (mantener pulsado) ── */
+    ['up', 'down'].forEach(function (dir) {
+      var b = document.getElementById('btn-' + dir);
+      var val = dir === 'up' ? 1 : -1;
+      function ini(e) { if (e) e.preventDefault(); vertDir = val; b.classList.add('pulsado'); }
+      function fin(e) { if (e) e.preventDefault(); if (vertDir === val) vertDir = 0; b.classList.remove('pulsado'); }
+      b.addEventListener('touchstart',  ini, { passive: false });
+      b.addEventListener('touchend',    fin, { passive: false });
+      b.addEventListener('touchcancel', fin, { passive: false });
+      b.addEventListener('mousedown',   ini);
+      b.addEventListener('mouseup',     fin);
+      b.addEventListener('mouseleave',  fin);
+    });
 
     /* ── TOAST ── */
     function showToast(msg) {
