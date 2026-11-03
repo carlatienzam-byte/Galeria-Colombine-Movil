@@ -6,6 +6,9 @@
   <title>Galería Colombine · Móvil</title>
 
   <script src="https://aframe.io/releases/1.7.1/aframe.min.js"></script>
+    <!-- Colisión con la malla de la Puerta (arcos, parte alta, techos) -->
+    <script src="three-mesh-bvh.min.js"></script>
+    <script src="colisiones.js"></script>
   <script src="https://unpkg.com/aframe-event-set-component@5.x.x/dist/aframe-event-set-component.min.js"></script>
   <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-extras@7.5.4/dist/aframe-extras.min.js"></script>
 
@@ -308,13 +311,47 @@
     <script>
       AFRAME.registerComponent('colisionador', {
         schema: {
-          forma: {default: 'caja'},   // 'caja' o 'circulo'
+          forma: {default: 'caja'},   // 'caja', 'circulo' o 'auto' (toma forma y giro del propio cartel)
           ancho: {default: 1},        // caja: medida en X local (m)
           fondo: {default: 1},        // caja: medida en Z local (m)
           radio: {default: 0.5},      // círculo
           alto:  {default: 40}        // altura del obstáculo (centrada en su posición)
         },
-        init: function () { this.el.sceneEl.colisionadores = (this.el.sceneEl.colisionadores || []).concat(this); },
+        init: function () {
+          this.el.sceneEl.colisionadores = (this.el.sceneEl.colisionadores || []).concat(this);
+          this.p = new THREE.Vector3(); this.q = new THREE.Quaternion(); this.e = new THREE.Vector3();
+          this.eu = new THREE.Euler(); this.c = new THREE.Vector3(); this.t = new THREE.Vector3();
+        },
+        /* Caja orientada en el mundo: {x,y,z, hx,hy,hz, yaw, circulo}. null si está oculto. */
+        obb: function () {
+          for (var o = this.el.object3D; o; o = o.parent) if (o.visible === false) return null;
+          var d = this.data, r = this.r || (this.r = {});
+          if (d.forma === 'auto') {
+            var m = this.el.getObject3D('mesh');
+            if (!m || !m.geometry) return null;
+            var g = m.geometry; if (!g.boundingBox) g.computeBoundingBox();
+            m.updateWorldMatrix(true, false);
+            var me = m.matrixWorld.elements;
+            // escala de cada eje = longitud de cada columna (funciona aunque una escala sea 0)
+            var sx = Math.hypot(me[0], me[1], me[2]), sy = Math.hypot(me[4], me[5], me[6]), sz = Math.hypot(me[8], me[9], me[10]);
+            g.boundingBox.getCenter(this.c).applyMatrix4(m.matrixWorld);
+            g.boundingBox.getSize(this.t);
+            r.x = this.c.x; r.y = this.c.y; r.z = this.c.z;
+            r.hx = this.t.x * sx / 2; r.hy = this.t.y * sy / 2; r.hz = this.t.z * sz / 2;
+            // giro alrededor de Y a partir del eje X local (o del Z si el X está aplastado)
+            r.yaw = sx > 1e-6 ? Math.atan2(-me[2], me[0]) : Math.atan2(me[8], me[10]);
+            r.circulo = false;
+            if (!isFinite(r.x + r.y + r.z + r.hx + r.hy + r.hz + r.yaw)) return null;
+            return r;
+          }
+          this.el.object3D.getWorldPosition(this.p);
+          this.el.object3D.getWorldQuaternion(this.q);
+          r.x = this.p.x; r.y = this.p.y; r.z = this.p.z; r.hy = d.alto / 2;
+          r.yaw = this.eu.setFromQuaternion(this.q, 'YXZ').y;
+          r.circulo = d.forma === 'circulo'; r.radio = d.radio;
+          r.hx = d.ancho / 2; r.hz = d.fondo / 2;
+          return r;
+        },
         remove: function () { var l = this.el.sceneEl.colisionadores || []; l.splice(l.indexOf(this), 1); }
       });
 
@@ -332,32 +369,32 @@
         resolver: function () {
           var lista = this.el.sceneEl.colisionadores;
           if (!lista || !lista.length) return;
-          var camEl = this.el.hasAttribute('camera') ? this.el : this.el.querySelector('[camera]');
+          var camEl = (this.el.components && this.el.components.camera) ? this.el : this.el.querySelector('[camera]');
           if (!camEl) return;
           var R = this.data.radio, mover = this.el.object3D.position;
           for (var pasada = 0; pasada < 2; pasada++) {
             camEl.object3D.getWorldPosition(this.cam);
             var pieY = this.cam.y - this.data.cuerpo, cabezaY = this.cam.y + 0.1;
             for (var i = 0; i < lista.length; i++) {
-              var col = lista[i], d = col.data, o = col.el.object3D;
-              o.getWorldPosition(this.c);
-              var mitadAlto = d.alto / 2;
-              if (cabezaY < this.c.y - mitadAlto || pieY > this.c.y + mitadAlto) continue;
-              var dx = this.cam.x - this.c.x, dz = this.cam.z - this.c.z, ex = 0, ez = 0;
-              if (d.forma === 'circulo') {
-                var r = d.radio + R, dist = Math.sqrt(dx * dx + dz * dz);
+              var b = lista[i].obb();
+              if (!b) continue;                                   // oculto (cartela cerrada, otro mundo…)
+              if (cabezaY < b.y - b.hy || pieY > b.y + b.hy) continue;
+              var dx = this.cam.x - b.x, dz = this.cam.z - b.z, ex = 0, ez = 0;
+              if (b.circulo) {
+                var r = b.radio + R, dist = Math.sqrt(dx * dx + dz * dz);
                 if (dist >= r) continue;
                 if (dist < 1e-4) { dx = 1; dist = 1; }
                 ex = dx / dist * (r - dist); ez = dz / dist * (r - dist);
               } else {
-                var yaw = o.rotation.y, cs = Math.cos(yaw), sn = Math.sin(yaw);
+                var yaw = b.yaw, cs = Math.cos(yaw), sn = Math.sin(yaw);
                 var lx =  cs * dx - sn * dz, lz = sn * dx + cs * dz;      // a coordenadas locales
-                var hx = d.ancho / 2 + R, hz = d.fondo / 2 + R;
+                var hx = b.hx + R, hz = b.hz + R;
                 if (Math.abs(lx) >= hx || Math.abs(lz) >= hz) continue;
                 var px = hx - Math.abs(lx), pz = hz - Math.abs(lz), mx = 0, mz = 0;
                 if (px < pz) mx = (lx >= 0 ? 1 : -1) * px; else mz = (lz >= 0 ? 1 : -1) * pz;
                 ex = cs * mx + sn * mz; ez = -sn * mx + cs * mz;            // de vuelta al mundo
               }
+              if (!isFinite(ex) || !isFinite(ez)) continue;
               mover.x += ex; mover.z += ez;
               this.cam.x += ex; this.cam.z += ez;
             }
@@ -425,8 +462,8 @@
     <!-- ══ SEÑALÉTICA (se lee al apuntar con el punto de mira) ══ -->
 
     <!-- Cartel de inicio -->
-    <a-cylinder position="0 0.60 -6" radius="0.5" height="1.50" material="color: #83632b" scale="-0.070 0.740 0.130"></a-cylinder>
-    <a-box id="cartel00" class="interactivo" data-nombre="Cartel de inicio" position="0 1.60 -6" width="1.5" height="1" depth="0.08"
+    <a-cylinder colisionador="forma: auto" position="0 0.60 -6" radius="0.5" height="1.50" material="color: #83632b" scale="-0.070 0.740 0.130"></a-cylinder>
+    <a-box colisionador="forma: auto" id="cartel00" class="interactivo" data-nombre="Cartel de inicio" position="0 1.60 -6" width="1.5" height="1" depth="0.08"
       src="Carteles_Comprimidos/FP-LOGO-estable.jpg"
       cartel-interactivo="cartelas: cartela00; ancho: 1.5; alto: 1; lado: -1; dy: 0.7"
       event-set__enter="_event: mouseenter; _target: #textoInicio; visible: true"
@@ -437,40 +474,40 @@
 
 
     <!-- Flecha 1 -->
-    <a-cylinder position="0 0 -20" radius="0.5" height="1.5" material="color: #83632b" scale="-0.070 0.740 0.130"></a-cylinder>
-    <a-box class="hover" position="0 1 -20" rotation="0 90 0" material="color: #f1bb5c" scale="0.10 0.97 1" src="Carteles_Comprimidos/flecha_derecha.jpg"
+    <a-cylinder colisionador="forma: auto" position="0 0 -20" radius="0.5" height="1.5" material="color: #83632b" scale="-0.070 0.740 0.130"></a-cylinder>
+    <a-box colisionador="forma: auto" class="hover" position="0 1 -20" rotation="0 90 0" material="color: #f1bb5c" scale="0.10 0.97 1" src="Carteles_Comprimidos/flecha_derecha.jpg"
       event-set__enter="_event: mouseenter; _target: #boxText12; visible: true"
       event-set__leave="_event: mouseleave; _target: #boxText12; visible: false"></a-box>
     <a-text id="boxText12" value="Apunta a los carteles y pulsa INTERACTUAR para aprender sobre Carmen de Burgos y su legado."
       align="center" color="#FFF" visible="false" position="0 2 -20" width="6" geometry="primitive: plane; width: 6.4; height: auto" material="shader: flat; color: #000; opacity: 0.55; transparent: true"></a-text>
 
     <!-- Flecha 2 -->
-    <a-cylinder position="35 0 -13" radius="0.5" height="1.5" material="color: #83632b" scale="-0.070 0.740 0.130"></a-cylinder>
-    <a-box class="hover" position="35 1 -13" rotation="0 -180 0" material="color: #f1bb5c" scale="0.10 0.97 1" src="Carteles_Comprimidos/flecha_derecha.jpg"
+    <a-cylinder colisionador="forma: auto" position="35 0 -13" radius="0.5" height="1.5" material="color: #83632b" scale="-0.070 0.740 0.130"></a-cylinder>
+    <a-box colisionador="forma: auto" class="hover" position="35 1 -13" rotation="0 -180 0" material="color: #f1bb5c" scale="0.10 0.97 1" src="Carteles_Comprimidos/flecha_derecha.jpg"
       event-set__enter="_event: mouseenter; _target: #boxText13; visible: true"
       event-set__leave="_event: mouseleave; _target: #boxText13; visible: false"></a-box>
     <a-text id="boxText13" value="Camina con la siguiente galeria de carteles."
       align="center" color="#FFF" visible="false" position="33 2 -13" rotation="0 -90 0" width="6" geometry="primitive: plane; width: 6.4; height: auto" material="shader: flat; color: #000; opacity: 0.55; transparent: true"></a-text>
 
     <!-- Flecha 3 -->
-    <a-cylinder position="31 0 14" radius="0.5" height="1.5" material="color: #83632b" scale="-0.070 0.740 0.130"></a-cylinder>
-    <a-box class="hover" position="31 1 14" rotation="0 -90 0" material="color: #f1bb5c" scale="0.10 0.97 1" src="Carteles_Comprimidos/flecha_derecha.jpg"
+    <a-cylinder colisionador="forma: auto" position="31 0 14" radius="0.5" height="1.5" material="color: #83632b" scale="-0.070 0.740 0.130"></a-cylinder>
+    <a-box colisionador="forma: auto" class="hover" position="31 1 14" rotation="0 -90 0" material="color: #f1bb5c" scale="0.10 0.97 1" src="Carteles_Comprimidos/flecha_derecha.jpg"
       event-set__enter="_event: mouseenter; _target: #boxText14; visible: true"
       event-set__leave="_event: mouseleave; _target: #boxText14; visible: false"></a-box>
     <a-text id="boxText14" value="Sigue hacia la proxima galeria de carteles."
       align="center" color="#FFF" visible="false" position="31 2 14" rotation="0 180 0" width="6" geometry="primitive: plane; width: 6.4; height: auto" material="shader: flat; color: #000; opacity: 0.55; transparent: true"></a-text>
 
     <!-- Flecha 4 -->
-    <a-cylinder position="-33 0 12" radius="0.5" height="1.5" material="color: #83632b" scale="-0.070 0.740 0.130"></a-cylinder>
-    <a-box class="hover" position="-33 1 12" rotation="0 -180 0" material="color: #f1bb5c" scale="0.10 0.97 1" src="Carteles_Comprimidos/flecha_derecha.jpg"
+    <a-cylinder colisionador="forma: auto" position="-33 0 12" radius="0.5" height="1.5" material="color: #83632b" scale="-0.070 0.740 0.130"></a-cylinder>
+    <a-box colisionador="forma: auto" class="hover" position="-33 1 12" rotation="0 -180 0" material="color: #f1bb5c" scale="0.10 0.97 1" src="Carteles_Comprimidos/flecha_derecha.jpg"
       event-set__enter="_event: mouseenter; _target: #boxText15; visible: true"
       event-set__leave="_event: mouseleave; _target: #boxText15; visible: false"></a-box>
     <a-text id="boxText15" value="No te vayas."
       align="center" color="#FFF" visible="false" position="-33 2 12" rotation="0 90 0" width="6" geometry="primitive: plane; width: 6.4; height: auto" material="shader: flat; color: #000; opacity: 0.55; transparent: true"></a-text>
 
     <!-- Flecha 5 -->
-    <a-cylinder position="-32 0 -15" radius="0.5" height="1.5" material="color: #83632b" scale="-0.070 0.740 0.130"></a-cylinder>
-    <a-box class="hover" position="-32 1 -15" rotation="0 -90 0" material="color: #f1bb5c" scale="0.10 0.97 1" src="Carteles_Comprimidos/flecha_derecha.jpg"
+    <a-cylinder colisionador="forma: auto" position="-32 0 -15" radius="0.5" height="1.5" material="color: #83632b" scale="-0.070 0.740 0.130"></a-cylinder>
+    <a-box colisionador="forma: auto" class="hover" position="-32 1 -15" rotation="0 -90 0" material="color: #f1bb5c" scale="0.10 0.97 1" src="Carteles_Comprimidos/flecha_derecha.jpg"
       event-set__enter="_event: mouseenter; _target: #boxText16; visible: true"
       event-set__leave="_event: mouseleave; _target: #boxText16; visible: false"></a-box>
     <a-text id="boxText16" value="Sigue, ya falta poco."
@@ -497,19 +534,19 @@
 
     <!-- ══ CARTELAS (ocultas; se colocan junto a su cartel al activarlo) ══ -->
     <!-- Cartela del cartel de inicio: cómo hacer el recorrido (versión app) -->
-    <a-image id="cartela00"  src="Carteles_Comprimidos/recorrido_00-INICIO-APP.jpg" width="1.14" height="3.2" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
-    <a-image id="cartela01"  src="Carteles_Comprimidos/01CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
-    <a-image id="cartela02"  src="Carteles_Comprimidos/02CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
-    <a-image id="cartela03"  src="Carteles_Comprimidos/03CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
-    <a-image id="cartela04"  src="Carteles_Comprimidos/04CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
-    <a-image id="cartela05"  src="Carteles_Comprimidos/05CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
-    <a-image id="cartela06"  src="Carteles_Comprimidos/06CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
-    <a-image id="cartela07"  src="Carteles_Comprimidos/07CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
-    <a-image id="cartela08a" src="Carteles_Comprimidos/08CARTELA-2.jpg" width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
-    <a-image id="cartela08b" src="Carteles_Comprimidos/08CARTELA-1.jpg" width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
-    <a-image id="cartela09"  src="Carteles_Comprimidos/09CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
-    <a-image id="cartela10"  src="Carteles_Comprimidos/10CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
-    <a-image id="cartela11"  src="Carteles_Comprimidos/11CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image colisionador="forma: auto" id="cartela00"  src="Carteles_Comprimidos/recorrido_00-INICIO-APP.jpg" width="1.14" height="3.2" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image colisionador="forma: auto" id="cartela01"  src="Carteles_Comprimidos/01CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image colisionador="forma: auto" id="cartela02"  src="Carteles_Comprimidos/02CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image colisionador="forma: auto" id="cartela03"  src="Carteles_Comprimidos/03CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image colisionador="forma: auto" id="cartela04"  src="Carteles_Comprimidos/04CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image colisionador="forma: auto" id="cartela05"  src="Carteles_Comprimidos/05CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image colisionador="forma: auto" id="cartela06"  src="Carteles_Comprimidos/06CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image colisionador="forma: auto" id="cartela07"  src="Carteles_Comprimidos/07CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image colisionador="forma: auto" id="cartela08a" src="Carteles_Comprimidos/08CARTELA-2.jpg" width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image colisionador="forma: auto" id="cartela08b" src="Carteles_Comprimidos/08CARTELA-1.jpg" width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image colisionador="forma: auto" id="cartela09"  src="Carteles_Comprimidos/09CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image colisionador="forma: auto" id="cartela10"  src="Carteles_Comprimidos/10CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
+    <a-image colisionador="forma: auto" id="cartela11"  src="Carteles_Comprimidos/11CARTELA.jpg"   width="2.14" height="3" visible="false" animation__pop="property: scale; from: 0.05 0.05 0.05; to: 1 1 1; dur: 380; easing: easeOutBack; startEvents: aparecer"></a-image>
 
     <!-- Planos de cierre -->
     <a-plane src="Carteles_Comprimidos/Logo-CBS-Nuevo.jpg"                 position="-17 12 -75" rotation="0 17 0"    scale="45 30 1"></a-plane>
@@ -549,7 +586,7 @@
     <a-sky src="Carteles_Comprimidos/cielo-nocturno.jpg"></a-sky>
 
     <!-- ══ CÁMARA (mismo esquema que Espacios Liminales) ══ -->
-    <a-entity id="rig" position="0 0 0" mobile-movement colisiones>
+    <a-entity id="rig" position="0 0 0" mobile-movement colisiones colision-malla="techo: true; alturas: 1.0 0.4 0">
       <a-camera id="camera"
                 position="0 1.6 0"
                 camera="userHeight: 0"
