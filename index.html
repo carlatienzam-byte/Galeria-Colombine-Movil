@@ -182,7 +182,7 @@
 
     /* ───────── Saludo de Carmen ─────────
        Mismo comportamiento que en la galería de escritorio:
-       clic (o botón INTERACTUAR) → gesto de hablar + voz + música de fondo atenuada,
+       botón INTERACTUAR → gesto de hablar + voz + música de fondo atenuada,
        y al terminar vuelve a saludar con la mano. */
     AFRAME.registerComponent('saludo-carmen', {
       schema: {
@@ -192,7 +192,8 @@
       },
       init: function () {
         this.hablando = false;
-        this.el.addEventListener('click', () => this.saludar());
+        // En la app móvil el saludo SOLO se activa con el botón INTERACTUAR
+        // (llama a saludar() directamente). Tocar la pantalla no hace nada.
         this.el.addEventListener('sound-ended', () => this.terminar());
       },
       saludar: function () {
