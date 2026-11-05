@@ -6,8 +6,6 @@
   <title>Galería Colombine · Móvil</title>
 
   <script src="https://aframe.io/releases/1.7.1/aframe.min.js"></script>
-  <!-- Cámara y joystick con varios dedos a la vez -->
-  <script src="multitactil.js"></script>
     <!-- Colisión con la malla de la Puerta (arcos, parte alta, techos) -->
     <script src="three-mesh-bvh.min.js"></script>
     <script src="colisiones.js"></script>
@@ -184,7 +182,7 @@
 
     /* ───────── Saludo de Carmen ─────────
        Mismo comportamiento que en la galería de escritorio:
-       botón INTERACTUAR → gesto de hablar + voz + música de fondo atenuada,
+       clic (o botón INTERACTUAR) → gesto de hablar + voz + música de fondo atenuada,
        y al terminar vuelve a saludar con la mano. */
     AFRAME.registerComponent('saludo-carmen', {
       schema: {
@@ -194,8 +192,7 @@
       },
       init: function () {
         this.hablando = false;
-        // En la app móvil el saludo SOLO se activa con el botón INTERACTUAR
-        // (llama a saludar() directamente). Tocar la pantalla no hace nada.
+        this.el.addEventListener('click', () => this.saludar());
         this.el.addEventListener('sound-ended', () => this.terminar());
       },
       saludar: function () {
@@ -642,7 +639,7 @@
     joyBase.addEventListener('touchmove', function (e) {
       e.preventDefault();
       if (!joyActive) return;
-      var p = joyPos(e.targetTouches[0] || e.touches[0]);
+      var p = joyPos(e.touches[0]);
       var d = Math.sqrt(p.x * p.x + p.y * p.y);
       var c = d > JOY_R ? JOY_R / d : 1;
       joyDx = p.x * c;
